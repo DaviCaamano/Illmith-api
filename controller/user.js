@@ -1,6 +1,6 @@
-const db = require('../utils/Database');
-const parse = require('../utils/Parse');
-const mail = require('../utils/Mail')
+const db = require('../utils/database');
+const parse = require('../utils/parse');
+const mail = require('../utils/mail')
 const bcrypt = require('bcrypt');
 const moment = require('moment');
 
@@ -11,6 +11,20 @@ const   MAX_USERNAME_LENGTH = 32,
 
 
 class User {
+
+    validate = (req, res) => {
+
+        if(req.userValidated){
+            const userInfo = req.user;
+            res.send({
+                username: userInfo.username,
+                email: userInfo.email
+            })
+        }
+        else {
+            return res.status(400).send({ success: false })
+        }
+    }
 
     login = async (req, res) => {
 
@@ -66,7 +80,7 @@ class User {
                             ...user,
                             token,
                             userId: user.id,
-                            tokenExpiration: jwt.decoded.exp
+                            tokenExpiration: tokenExpiration
                         })
                     ).catch(() => {
                         genericLoginError(req, res)
@@ -91,11 +105,11 @@ class User {
         const query = `
         DELETE
         FROM authentications
-        WHERE user_id = ${body.userId || 'NULL'}
-        or token = ${body.token? '\"' + body.token + '\"': 'NULL' }
-        or ip = ${ip? '\"' + ip + '\"': 'NULL' };`
+        WHERE ip = "${ip}" 
+        OR token = ${body.token? '\"' + body.token + '\"': 'NULL' };
+        `;
 
-        db.query(query).then((authRecs) => {
+        db.query(query).then(() => {
 
             res.send({ success: true })
         }).catch(() => genericLoginError(req, res))
@@ -246,106 +260,94 @@ class User {
         })
     }
 
-
     startPasswordReset = (req, res) => {
 
         const body = req.method === 'POST'? req.body: req.query;
+        console.log(body);
 
         let query = `
-        SELECT * FROM pending_users
+        SELECT * 
+        FROM users
         WHERE email = "${body.user}"
         OR username = "${body.user}";`;
-        db.query(query, true).then( async (existingUserRec) => {
+        db.query(query, true).then( async (userRec) => {
 
-            console.log(existingUserRec[0])
+            //No user has either an email or username matching the requested account.
+            if(!userRec || (Array.isArray(userRec) && !userRec.length))
+                return res.send({success: true});
 
-            //GET THE EMAIL OF THIS USE.
-            const email = null;
+            const email = userRec[0].email;
+            const token = parse.randomizeString(127);
+            mail.sendResetPasswordEmail(email, token).then(() => {
 
+                let params = db.insertQueryParams({
+                    user_id: userRec[0].id,
+                    token,
+                    expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
+                }, 'user_id');
+                query = `
+                INSERT INTO pending_password_reset (${params.columns})
+                VALUES (${params.values})
+                ON DUPLICATE KEY UPDATE ${params.onDuplicateKey};
+                `;
+                db.query(query, true)
+                    .then(() => {
+
+                        console.log('Reset Password Email Sent')
+                        return res.send({ success: true });
+                    })
+                    .catch((err) => {
+
+                        console.log(err);
+                        res.send({ success : true });
+                    })
+            }).catch(() => {
+
+                res.send({ success: true })
+            })
 
         })
     }
 
-    finishPasswordReset = (req, res) =>{
+    finishPasswordReset = (req, res) => {
 
         const body = req.method === 'POST'? req.body: req.query;
 
-        if(body.email) body.email = body.email.toLowerCase();
-        if(body.username) body.username = body.username.toLowerCase();
-
         let query = `
-            SELECT id
-            FROM users
-            WHERE email = "${body.email}";
-            SELECT id
-            FROM users
-            WHERE username = "${body.username}";`;
+        DELETE FROM pending_password_reset
+        WHERE expiration < NOW();
+        SELECT * 
+        FROM pending_password_reset p
+        LEFT JOIN users u
+        ON u.id = p.user_id
+        WHERE token = "${body.token}";`;
+        db.query(query, true).then( async (pendingUserRecs) => {
 
-        db.query(query, true).then( async userRec => {
-
-            /** ERRORS **/
-            const validation = validateRegisteringUser(
-                userRec[0].length > 0,
-                userRec[1] && userRec[1].length > 0,
-                body.email,
-                body.username,
-                body.password
-            )
-
-            if(!validation.success){
-
-                return res.status(401).send(validation)
-            }
-
-            const userInfo = {
-                email: body.email,
-                password: body.password,
-                expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
-            }
-
-            if(body.username) userInfo.username = body.username;
-            if(body.subscribe) userInfo.subscribe = body.subscribe;
-
-            parse.signJWT(userInfo).then(jwt => {
-
-                mail.sendUserRegistrationEmail(body.email, jwt.token).then((error, info) => {
-
-                    if (error.rejected.length > 0) {
-
-                        res.status(500).send(error)
-                    } else {
-
-                        const params = {
-                            email: userInfo.email,
-                            expiration: userInfo.expiration,
-                            token: jwt.token
-                        }
-                        if(userInfo.username) params.username = userInfo.username;
-                        const subscribeQueryParams = db.insertQueryParams(params);
-                        const userQueryParams = db.insertQueryParams(params);
-                        query = `
-                            DELETE FROM pending_users
-                            where email="${body.email}";
-                            INSERT INTO pending_users (${userQueryParams.columns})
-                            VALUES (${userQueryParams.values});`;
-
-                        db.query(query, true).then(pendingUsersRec => {
-
-                            res.send(params)
-                        }).catch(err => {
-
-                            genericLoginError(req, res)
-                        })
-                    }
+            console.log(pendingUserRecs[1])
+            //Link no longer valid or was never valid
+            if(pendingUserRecs[1].length === 0)
+                return res.status(400).send({
+                    success: false,
+                    ...codes.Error.ResetPassword.forgotPasswordLinkInvalid
                 })
-            })
-        }).catch(err => {
 
-            genericLoginError(req, res)
+            const userInfo = pendingUserRecs[1][0];
+            if(userInfo.user_id){
+
+                const password = await parse.hashPassword(body.password)
+                query = `
+                    DELETE FROM pending_users
+                    WHERE email = "${userInfo.email}";
+                    UPDATE users 
+                    SET password = "${password}"
+                    WHERE id = ${userInfo.user_id}`
+
+                db.query(query, true).then(() => {
+                    res.send({ success: true })
+                })
+            }
         })
     }
-
-
 
 }
 

@@ -1,9 +1,9 @@
 const mysql = require('mysql2');
-const parse = require('./Parse');
+const {RateLimiterMySQL} = require('rate-limiter-flexible');
 
 let db;
 try{
-    db = mysql.createConnection({
+    db = mysql.createPool({
         host: process.env.DB_HOST,
         user: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
@@ -11,11 +11,14 @@ try{
         multipleStatements: true,
         connectionLimit: 100
     });
+} catch(e) {
+    console.log('DATEBASE INIT ERROR');
+    console.log(e);
 }
-catch(e){ console.log(e); }
 
 class Database {
 
+    db = db;
 
     query(query, raw = false){
 
@@ -66,6 +69,52 @@ class Database {
         });
     }
 
+
+    insertQueryParams(fields, onDuplicateKey){
+
+        try {
+
+            if(typeof fields !== 'object' && Array.isArray(fields))
+                throw new Error('Insert Query Params function only accepts JSON.');
+            let values = [];
+            for(let field in fields)
+                values.push(fields[field]);
+
+            const query = {
+                columns: this.createInsertColumns(...Object.keys(fields)),
+                values: this.createInsertValues(...values)
+            }
+            if(onDuplicateKey) query.onDuplicateKey = this.createDuplicateKeyPairs(fields)
+            return query;
+
+        } catch(e){
+
+            e.location = "Error in db_functions.insertQueryParams().";
+            log.error(e);
+        }
+
+
+    }
+
+
+
+    createInsertColumns(...args){
+
+        if(args.length === 0) return '';
+        else if(args.length === 1) return args[0];
+        else{
+            let argumentString = '';
+            for(let i in args){
+
+                if(i > 0) argumentString = argumentString + ', ';
+                if(args[i] === null || typeof args[i] === 'undefined') argumentString = argumentString + '';
+                else argumentString = argumentString + args[i];
+            }
+            return argumentString;
+        }
+    }
+
+
     createInsertValues(...args){
 
         if(args.length === 0) return '';
@@ -90,39 +139,29 @@ class Database {
         }
     }
 
-    insertQueryParams(fields){
-
-        try {
-
-            if(typeof fields !== 'object' && Array.isArray(fields))
-                throw new Error('Insert Query Params function only accepts JSON.');
-            let values = [];
-            for(let field in fields)
-                values.push(fields[field]);
-
-            return {
-                columns: this.createInsertColumns(...Object.keys(fields)),
-                values: this.createInsertValues(...values)
-            }
-        } catch(e){
-
-            e.location = "Error in db_functions.insertQueryParams().";
-            log.error(e);
-        }
-
-
-    }
-    createInsertColumns(...args){
+    createDuplicateKeyPairs(args){
 
         if(args.length === 0) return '';
         else if(args.length === 1) return args[0];
         else{
             let argumentString = '';
+
+            let j = 0;
             for(let i in args){
 
-                if(i > 0) argumentString = argumentString + ', ';
-                if(args[i] === null || typeof args[i] === 'undefined') argumentString = argumentString + '';
-                else argumentString = argumentString + args[i];
+            //Exclude Keys.
+                argumentString += (j++ === 0)? `${i} = `: `, ${i} = `
+                if(args[i] === null || typeof args[i] === 'undefined')
+                    argumentString += 'NULL';
+                else if(typeof args[i] === 'boolean') {
+                    argumentString += (args[i] === false)? '0': '1';
+                }
+                else if(typeof args[i] === 'object')
+                    argumentString += this.parseObjectForQuery(args[i]);
+                else if(typeof args[i] === 'number' || typeof args[i] === 'number')
+                    argumentString += '' + args[i];
+                else argumentString += '"'+ args[i] + '"'
+
             }
             return argumentString;
         }

@@ -1,9 +1,7 @@
 const nodemailer = require('nodemailer');
-const parse = require('../utils/Parse');
+const parse = require('./parse');
 
-const frontEndUrl = 'http://localhost:3000'
-// const frontEndUrl = process.env.SITE_URL
-
+const frontEndUrl = process.env.NODE_ENV === 'prod'? process.env.SITE_URL: process.env.LOCAL_HOST
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -49,16 +47,14 @@ const forgotPasswordOptions = (to, token) => {
 
     /**
      *
-     * use randomizeString(length) in User.js and pass it into the second argument of this function.
+     * use randomizeString(length) in user.js and pass it into the second argument of this function.
      */
-    console.log('token');
-    console.log(token);
 
     //REAL URL:         <a href="${process.env.SITE_URL}/user/CompleteUserRegistration/${token}">
     return mailOptions(
         'noreplysennoscampaign@gmail.com',
         to,
-        'Illmith Campaign User Registration',
+        'Illmith Campaign Password Reset',
         `
         <h1>Illmith User Registration</h1>
         <p>
@@ -69,18 +65,26 @@ const forgotPasswordOptions = (to, token) => {
         </p>
         <br />
        
-        <a href="${frontEndUrl}/user/resetpassword/${token}">
-            <b style="font-size: 24px">Click here to complete your account registration.</b>
+        <a href="${frontEndUrl}/user/CompletePasswordReset/${token}">
+            <b style="font-size: 24px">Click here to reset your password.</b>
         </a>`
     );
 }
 
 class Mail {
 
-    sendUserRegistrationEmail = (to, token) => {
+    sendUserRegistrationEmail = (to, token, env) => {
         return new Promise((resolve, reject) => {
 
             transporter.sendMail(registerUserOption(to, token))
+                .then(resolve)
+                .catch(reject);
+        })
+    }
+    sendResetPasswordEmail = (to, token, env) => {
+        return new Promise((resolve, reject) => {
+
+            transporter.sendMail(forgotPasswordOptions(to, token))
                 .then(resolve)
                 .catch(reject);
         })

@@ -4,7 +4,7 @@ const express = require('express');
 const path = require('path');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
-const log = require('./utils/Colors');
+const log = require('./utils/colors');
 const app = express();
 const bodyParser = require('body-parser');
 var cors = require('cors')
@@ -15,8 +15,8 @@ const usersRouter = require('./routes/users');
 const testRouter = require('./routes/test');
 
 //controllers
-const db = require('./utils/Database');
-const parse = require('./utils/Parse')
+const db = require('./utils/database');
+const parse = require('./utils/parse')
 // view engine setup
 app.set('views', path.join(__dirname, 'views'));
 app.set('view engine', 'hbs');
@@ -52,6 +52,7 @@ app.use(function(err, req, res, next) {
 
 db.getEnvVars().then((envVars) => {
 
+  console.log(process.env.NODE_ENV === 'prod'? process.env.SITE_URL: process.env.LOCAL_HOST)
   app.listen(process.env.PORT, () =>{
 
     log.light('The magic happens on port ' + process.env.PORT + '. ' + new Date().toString());

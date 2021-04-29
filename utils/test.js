@@ -1,4 +1,4 @@
-const db = require('../utils/Database');
+const db = require('./database');
 
 
 class test {
@@ -17,4 +17,4 @@ class test {
     }
 }
 
-module.exports = test;
+module.exports = new test();

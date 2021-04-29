@@ -13,5 +13,11 @@ module.exports = {
         watch_delay: 1000,
         watch: true,
         max_memory_restart: '1G',
-    }]
+        env: {
+            NODE_ENV: 'dev'
+        },
+        env_production: {
+            "NODE_ENV": "prod",
+        }
+    }],
 };

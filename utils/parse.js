@@ -7,7 +7,7 @@ A class for the parsing/formatting of strings/JSON.
 */
 class Parse {
 
-  encryptPassword = (password) => {
+  hashPassword = (password) => {
 
     return new Promise(async (resolve, reject) => {
 
@@ -35,18 +35,6 @@ class Parse {
     })
 
   };
-
-  verifyPassword = (password, encryptedPassword) => {
-
-    return new Promise((resolve, reject) => {
-
-      bcrypt.compare(password, encryptedPassword, (err, decrypt) => {
-
-        if((!err && decrypt)) resolve(true);
-        else reject(false);
-      })
-    })
-  }
 
   jwtVerify = (token) => {
 
