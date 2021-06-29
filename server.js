@@ -1,38 +1,46 @@
 require('dotenv').config();
-const  createError = require('http-errors');
 const express = require('express');
+const app = express();
+app.disable('etag');
+
 const path = require('path');
+const  createError = require('http-errors');
 const cookieParser = require('cookie-parser');
 const logger = require('morgan');
 const log = require('./utils/colors');
-const app = express();
 const bodyParser = require('body-parser');
-var cors = require('cors')
-
-//routers
-const indexRouter = require('./routes/index');
-const usersRouter = require('./routes/users');
-const testRouter = require('./routes/test');
-
-//controllers
-const db = require('./utils/database');
-const parse = require('./utils/parse')
-// view engine setup
-app.set('views', path.join(__dirname, 'views'));
-app.set('view engine', 'hbs');
+const cors = require('cors')
 
 // middleware
+app.options('*', cors({ optionsSuccessStatus: 200 }))
+app.use(cors({
+  optionsSuccessStatus: 200,
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  credentials :  true,
+  origin: true
+}))
 app.use(bodyParser.urlencoded({limit: '10mb', extended: true}));
 app.use(bodyParser.json({limit: '10mb', extended: true}));
 app.use(logger('dev'));
 app.use(cookieParser());
-app.use(cors())
+
+//routers
+const indexRouter = require('./routes/');
+const testRouter = require('./routes/test');
+
+//controllers  /** DELETE ME *************************************************/
+const db = require('./utils/database');
+
+// view engine setup
+app.set('views', path.join(__dirname, 'views'));
+app.set('view engine', 'hbs');
 
 //Routes
 app.use('/api', indexRouter);
-app.use('/api/users', usersRouter);
 app.use('/api/test', testRouter);
 app.use('/api/public', express.static(path.join(__dirname, './public')));
+app.use('/api/article/display', express.static(path.join(__dirname, './public/img/article/display/')));
+app.use('/api/article/thumbnail', express.static(path.join(__dirname, './public/img/article/thumbnail/')));
 
 // catch 404 and forward to error handler
 app.use(function(req, res, next) {
@@ -50,9 +58,10 @@ app.use(function(err, req, res, next) {
   res.render('error');
 });
 
+
+
 db.getEnvVars().then((envVars) => {
 
-  console.log(process.env.NODE_ENV === 'prod'? process.env.SITE_URL: process.env.LOCAL_HOST)
   app.listen(process.env.PORT, () =>{
 
     log.light('The magic happens on port ' + process.env.PORT + '. ' + new Date().toString());

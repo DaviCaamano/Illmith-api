@@ -11,6 +11,12 @@
 # production
 /build
 
+#images
+/public/image/article
+
+#database models
+/database/tables
+
 # misc
 .DS_Store
 .env.local

@@ -1,12 +1,12 @@
 /**
  * A middleware to throttle brute force attempts.
  */
-const { db } = require('../utils/database');
+const { conn } = require('../utils/database');
 const {RateLimiterMySQL} = require('rate-limiter-flexible');
 const parse = require('../utils/parse');
 
 const opts = {
-    storeClient: db,
+    storeClient: conn,
     dbName: process.env.DB_NAME,
     tableName: 'rate_limit_protection',
     points: 5,

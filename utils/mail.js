@@ -1,7 +1,4 @@
 const nodemailer = require('nodemailer');
-const parse = require('./parse');
-
-const frontEndUrl = process.env.NODE_ENV === 'prod'? process.env.SITE_URL: process.env.LOCAL_HOST
 
 const transporter = nodemailer.createTransport({
     service: 'gmail',
@@ -18,10 +15,6 @@ const mailOptions = (from, to, subject, html) => {
 }
 const registerUserOption = (to, token) => {
 
-    console.log('token');
-    console.log(token);
-
-    //REAL URL:         <a href="${process.env.SITE_URL}/user/CompleteUserRegistration/${token}">
     return mailOptions(
         'noreplysennoscampaign@gmail.com',
         to,
@@ -31,13 +24,13 @@ const registerUserOption = (to, token) => {
         <p>
             Thank you for registering an account with us at Illmith.com. If you like the world we\'ve built, feel free 
             to show your support at our 
-            <a href="${frontEndUrl}/donate">
+            <a href="${process.env.FRONTEND_URL}/donate">
                 donation page.
             </a>
         </p>
         <br />
        
-        <a href="${frontEndUrl}/user/CompleteUserRegistration/${token}">
+        <a href="${process.env.FRONTEND_URL}/user/CompleteUserRegistration/${token}">
             <b style="font-size: 24px">Click here to complete your account registration.</b>
         </a>`
     );
@@ -65,7 +58,7 @@ const forgotPasswordOptions = (to, token) => {
         </p>
         <br />
        
-        <a href="${frontEndUrl}/user/CompletePasswordReset/${token}">
+        <a href="${process.env.FRONTEND_URL}/user/CompletePasswordReset/${token}">
             <b style="font-size: 24px">Click here to reset your password.</b>
         </a>`
     );

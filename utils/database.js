@@ -1,9 +1,10 @@
 const mysql = require('mysql2');
-const {RateLimiterMySQL} = require('rate-limiter-flexible');
+const log = (...args) => console.log(...args);
 
-let db;
+const LOG_ENABLED = true;
+let conn;
 try{
-    db = mysql.createPool({
+    conn = mysql.createPool({
         host: process.env.DB_HOST,
         user: process.env.DB_USER,
         password: process.env.DB_PASSWORD,
@@ -12,162 +13,184 @@ try{
         connectionLimit: 100
     });
 } catch(e) {
-    console.log('DATEBASE INIT ERROR');
-    console.log(e);
+    log('DATEBASE INIT ERROR');
+    log(e);
 }
 
 class Database {
 
-    db = db;
+    conn = conn;
+    connection = conn;
+    query = (query, params, connection, rawFlag = false) => {
 
-    query(query, raw = false){
+        const connector = typeof connection === 'boolean' || typeof connection === 'undefined'? conn: connection;
+        const raw = params === true || connection === true || !!rawFlag;
 
-        console.log('db.query');
-        console.log(query);
+        console.log('raw', raw)
         return new Promise(async (resolve, reject) => {
 
-            db.query(query, (err, resp) => {
+            let sql = connector.format(query, Array.isArray(params)? params: undefined);
+            if (LOG_ENABLED) {
 
-                if (err)
+                log('db.query');
+                log(sql);
+            }
+            connector.query(sql, (err, resp) => {
+
+                if (err) {
+
+                    log('MYSQL Error:')
+                    log(sql)
+                    log(err)
                     reject({
                         success: false,
                         description: 'Internal Server Error',
                         status: 500,
                         error: err
                     });
-                else
-                if (raw)
-                    resolve(resp);
-                else
-                    resolve({ success: true, data: resp });
+                } else resolve(raw? resp: {success: true, data: resp});
             });
         })
     }
 
-    getEnvVars = () => {
-        return new Promise((resolve, reject) => {
+    insert = (table, params, updateDuplicates, rawFlag) => {
+        try{
 
-            if(!this.envVarsSet){
+            //if last argument is a boolean, set raw as true
+            const raw = params === true || updateDuplicates === true || !!rawFlag
+            const [query, parsedParams] = writeInsertQuery(table, params, false, updateDuplicates);
 
-                let query = `
-            SELECT * 
-            FROM env;`;
-
-                /*
-                WHERE name = "BCRYPT_SALT_ROUNDS";
-                SELECT *
-                FROM env
-                WHERE name = "JWT_SECRET"
-                 */
-                this.query(query).then(envVars => {
-
-                    for(let data of envVars.data)
-                        process.env[data.name] = data.value
-                    resolve();
-                }).catch(reject);
-            }
-        });
-    }
-
-
-    insertQueryParams(fields, onDuplicateKey){
-
-        try {
-
-            if(typeof fields !== 'object' && Array.isArray(fields))
-                throw new Error('Insert Query Params function only accepts JSON.');
-            let values = [];
-            for(let field in fields)
-                values.push(fields[field]);
-
-            const query = {
-                columns: this.createInsertColumns(...Object.keys(fields)),
-                values: this.createInsertValues(...values)
-            }
-            if(onDuplicateKey) query.onDuplicateKey = this.createDuplicateKeyPairs(fields)
-            return query;
+            return this.query(query, parsedParams, raw)
 
         } catch(e){
 
-            e.location = "Error in db_functions.insertQueryParams().";
-            log.error(e);
+            e.location = "Error in database.insert().";
+            log(e);
         }
-
 
     }
 
+    insertIgnore = (table, params, updateDuplicates, rawFlag) => {
 
+        try{
+            //if last argument is a boolean, set raw as true
+            const raw = (params === true || updateDuplicates === true || !!rawFlag)
+            console.log('Coming from ignore:', raw)
+            const [query, parsedParams] = writeInsertQuery(table, params, true, updateDuplicates);
+            return this.query(query, parsedParams, raw)
 
-    createInsertColumns(...args){
+        } catch(e){
 
-        if(args.length === 0) return '';
-        else if(args.length === 1) return args[0];
-        else{
-            let argumentString = '';
-            for(let i in args){
-
-                if(i > 0) argumentString = argumentString + ', ';
-                if(args[i] === null || typeof args[i] === 'undefined') argumentString = argumentString + '';
-                else argumentString = argumentString + args[i];
-            }
-            return argumentString;
+            e.location = "Error in database.insertIgnore().";
+            log(e);
         }
+
     }
 
+    writeInsert = (table, params, updateDuplicates) => {
+        return writeInsertQuery(table, params, false, updateDuplicates);
+    }
 
-    createInsertValues(...args){
+    writeIgnoreInsert = (table, params, updateDuplicates) => {
+        return writeInsertQuery(table, params, true, updateDuplicates);
+    }
 
-        if(args.length === 0) return '';
-        else if(args.length === 1) return args[0];
-        else{
-            let argumentString = '';
+    getEnvVars = () => {
+        try{
 
-            for(let i in args){
+            return new Promise((resolve, reject) => {
 
-                if(i > 0) argumentString = argumentString + ', ';
-                if(args[i] === null || typeof args[i] === 'undefined') argumentString = argumentString + 'NULL';
-                else if(typeof args[i] === 'boolean') {
-                    if (args[i] === false) argumentString = argumentString + '0';
-                    else argumentString = argumentString + '1';
+                if(!this.envVarsSet){
+
+                    this.query('SELECT * FROM env', true).then(envVars => {
+
+                        for(let data of envVars)
+                            process.env[data.name] = data.value
+
+                        process.env.FRONTEND_URL = process.env.NODE_ENV === 'prod'
+                            ? process.env.SITE_URL
+                            : process.env.LOCAL_HOST
+
+                        this.envVarsSet = true;
+                        resolve();
+                    }).catch(reject);
                 }
-                else if(typeof args[i] === 'object') argumentString += this.parseObjectForQuery(args[i]);
-                else if(typeof args[i] === 'number' || typeof args[i] === 'number')
-                    argumentString = argumentString + '' + args[i];
-                else argumentString = argumentString + '"'+ args[i] + '"'
-            }
-            return argumentString;
+            });
+        } catch(e){
+
+            e.location = "Error in database.getEnvVars().";
+            log(e);
         }
     }
 
-    createDuplicateKeyPairs(args){
+}
 
-        if(args.length === 0) return '';
-        else if(args.length === 1) return args[0];
-        else{
-            let argumentString = '';
+writeInsertQuery = (table, params, ignore, duplicateUpdate) => {
 
-            let j = 0;
-            for(let i in args){
+    try {
+        if(!params) return;
+        if(typeof params !== 'object' || Array.isArray(params))
+            throw new Error('Insert Query Params function only accepts JSON.');
+
+        let newParams = [];
+        for(let field in params)
+            newParams.push(params[field]);
+
+        const   columns = Object.keys(params).join(', '),
+            values = newParams.map(item => '?').join(', ');
+
+        let onDuplicateUpdateString;
+        if(duplicateUpdate) {
+
+            [onDuplicateUpdateString, duplicateParams] = createDuplicateKeyPairs(params);
+            newParams.push.apply(newParams, duplicateParams);
+        }
+
+        return [
+            `INSERT${ignore? ' IGNORE ': ' '}INTO ${table} (${columns})
+            VALUES (${values})${onDuplicateUpdateString? `
+            ON DUPLICATE KEY UPDATE ${onDuplicateUpdateString};`: ';'}`,
+            newParams
+        ]
+    } catch(e){
+
+        e.location = "Error in database.writeInsertQuery().";
+        log(e);
+    }
+}
+
+
+const createDuplicateKeyPairs = (args) => {
+    try{
+
+        const params = [];
+        let argumentString = '',
+            j = 0;
+
+        for(let i in args){
 
             //Exclude Keys.
-                argumentString += (j++ === 0)? `${i} = `: `, ${i} = `
-                if(args[i] === null || typeof args[i] === 'undefined')
-                    argumentString += 'NULL';
-                else if(typeof args[i] === 'boolean') {
-                    argumentString += (args[i] === false)? '0': '1';
-                }
-                else if(typeof args[i] === 'object')
-                    argumentString += this.parseObjectForQuery(args[i]);
-                else if(typeof args[i] === 'number' || typeof args[i] === 'number')
-                    argumentString += '' + args[i];
-                else argumentString += '"'+ args[i] + '"'
+            argumentString += (j++ === 0)
+                ? `
+        ${i} = ?`
+                : `,
+        ${i} = ?`
+            params.push(args[i]);
 
-            }
-            return argumentString;
         }
+        return [argumentString, params];
+    } catch(e){
+
+        e.location = "Error in database.createDuplicateKeyPairs().";
+        log(e);
     }
 
-    parseObjectForQuery(obj, level = 0){
+}
+
+
+const parseObjectForQuery = (obj, level = 0) => {
+
+    try{
 
         let stringified = level === 0? '"': '';
         stringified += Array.isArray(obj)? '[': '{';
@@ -179,15 +202,16 @@ class Database {
             if (typeof obj[prop] === 'object' && obj[prop] !== null)
 
                 if (!Array.isArray(obj))
-                    stringified += '\\"' + prop + '\\":' + this.parseObjectForQuery(obj[prop], level + 1);
+                    stringified += '\\"' + prop + '\\":' + parseObjectForQuery(obj[prop], level + 1);
                 else
-                    stringified += this.parseObjectForQuery(obj[prop], level + 1);
+                    stringified += parseObjectForQuery(obj[prop], level + 1);
 
             //Property value is a string and needs quotations
             else if (typeof obj[prop] === 'string') {
 
                 if (!Array.isArray(obj))
-                    stringified += '\\"' + prop.replace(/"/g, '\\"') + '\\":\\"' + obj[prop].replace(/"/g, '\\"') + '\\"';
+                    stringified += '\\"' + prop.replace(/"/g, '\\"') + '\\":\\"'
+                        + obj[prop].replace(/"/g, '\\"') + '\\"';
                 else
                     stringified += '\\"' + obj[prop].replace(/"/g, '\\"') + '\\"';
             }
@@ -206,24 +230,10 @@ class Database {
         stringified += Array.isArray(obj)? ']': '}';
         stringified += level === 0? '"': '';
         return stringified ;
-    }
+    } catch(e){
 
-    parseObjectForUpdate(obj){
-
-        if(Object.keys(obj).length === 0) return '';
-        let argumentString = '',
-            iter = 0;
-        for(let i in obj){
-
-            if(iter++ > 0) argumentString += ', ';
-            if(obj[i] === null || typeof obj[i] === 'undefined') argumentString += i + ' = NULL';
-            else if(obj[i] === false) argumentString += i + ' = 0';
-            else if(obj[i] === true) argumentString += i + ' = 1';
-            else if(typeof obj[i] === 'object')  argumentString += i + ' = ' + this.parseObjectForQuery(obj[i]);
-            else if(typeof obj[i] === 'number' || typeof obj[i] === 'boolean') argumentString += i + ' = ' + obj[i];
-            else argumentString += i + ' = "'+ obj[i] + '"'
-        }
-        return argumentString;
+        e.location = "Error in database.getEnvVars().";
+        log(e);
     }
 }
 

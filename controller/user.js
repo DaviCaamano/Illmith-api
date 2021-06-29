@@ -1,359 +1,441 @@
+const bcrypt = require('bcrypt');
+const moment = require('moment');
 const db = require('../utils/database');
 const parse = require('../utils/parse');
 const mail = require('../utils/mail')
-const bcrypt = require('bcrypt');
-const moment = require('moment');
 
-let { codes, getCode } = require('../data/codes');
+const log = (...args) => console.log(...args);
+let { codes } = require('../utils/codes');
 const   MAX_USERNAME_LENGTH = 32,
         MAX_PASSWORD_LENGTH = 32,
         MAX_EMAIL_LENGTH = 255;
 
+const ADMIN_ID = 0;
 
 class User {
 
     validate = (req, res) => {
 
-        if(req.userValidated){
-            const userInfo = req.user;
-            res.send({
-                username: userInfo.username,
-                email: userInfo.email
-            })
+        try{
+
+            if(req.userValidated){
+
+                const user = req.user;
+                const response = {
+                    token: user.token,
+                    expiration: user.expiration,
+                };
+                if(user.role_id === ADMIN_ID) response.admin = true;
+                res.send(response)
+            }
+            else {
+                return res.status(400).send({ success: false })
+            }
+        } catch(e){
+
+            e.location = "Error in users.validate().";
+            log(e);
+            res.status(500).send({ success: false })
         }
-        else {
-            return res.status(400).send({ success: false })
+    }
+
+    authorize = (req, res) => {
+
+        try{
+
+            if(req.userAuthorized)
+                res.send({
+                    success: true,
+                    token: req.user.token,
+                    expiration: req.user.expiration,
+                });
+            else
+                return res.status(400).send({ success: false })
+        } catch(e){
+
+            e.location = "Error in users.authorize().";
+            log(e);
+            res.status(500).send({ success: false })
         }
     }
 
     login = async (req, res) => {
 
-        const body = req.method === 'POST'? req.body: req.query;
-        const ip = parse.getIp(req);
+        try{
 
-        const identifier = body.user? body.user.toLowerCase(): '';
-        let query = `
-            SELECT *
+            const body = req.body;
+
+
+            const identifier = body.user? body.user.toLowerCase(): '';
+
+            let query = `
+            SELECT id, email, username, password, role_id 
             FROM users
-            WHERE email = "${identifier}"
-            OR username = "${identifier}";
-            SELECT *
+            WHERE email = ?
+            OR username = ?
+            LIMIT 1;
+            SELECT email
             FROM pending_users
-            WHERE email = "${identifier}"
-            OR username = "${identifier}";`;
+            WHERE email = ?
+            OR username = ?
+            LIMIT 1;`;
 
-        db.query(query, true).then( async userRec => {
+            db.query(query, [identifier, identifier, identifier, identifier], true)
+            .then(async ([[user], [pendingUser]]) => {
 
-            const user = userRec[0][0];
-            const pendingUser = userRec[1][0];
+                if(pendingUser) return res.status(400).send(codes.Error.UserRegistration.emailNotValidated)
 
-            if(!user || !user.email || !user.password){
+                if(!user || !user.email || !user.password){
 
-                if(pendingUser){
-
-                    return res.status(400).send(codes.Error.UserRegistration.emailNotValidated)
+                    return loginCredentialsError(req, res);
                 }
-                else return loginCredentialsError(req, res);
-            }
 
-            if (await bcrypt.compare(body.password, user.password)) {
+                if (await bcrypt.compare(body.password, user.password)) {
+                    loginResponse(
+                        parse.getIp(req),
+                        user.id,
+                        user.email,
+                        user.username,
+                        body.remember,
+                        user.role_id === ADMIN_ID
+                    )
+                    .then((response) => res.send(response))
+                        .catch(() => genericLoginError(req, res));
 
-                /** Correct Username/Password */
-                delete user.password;
-                parse.signJWT(JSON.parse(JSON.stringify(user))).then(jwt => {
+                } else { loginCredentialsError(req, res); }
+            })
+            .catch(() => { genericLoginError(req, res) })
+        } catch(e){
 
-                    const token = jwt.token
-                    const tokenExpiration = moment(jwt.decoded.exp * 1000).format('YYYY-MM-DD hh:mm:ss')
-                    const params = db.insertQueryParams({
-                        user_id: user.id,
-                        ip,
-                        expiration: tokenExpiration,
-                        token
-                    });
+            e.location = "Error in users.login().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
+    }
 
-                    let query = `
-                    INSERT INTO authentications (${params.columns})
-                    VALUES (${params.values});`;
-                    db.query(query).then(() =>
-                        res.send({
-                            success: true,
-                            ...user,
-                            token,
-                            userId: user.id,
-                            tokenExpiration: tokenExpiration
-                        })
-                    ).catch(() => {
-                        genericLoginError(req, res)
-                    })
-                });
+    authorizedLogin = async (req, res) => {
 
-            } else {
-                loginCredentialsError(req, res);
-            }
+        try{
 
-        }).catch((err) => {
+            const body = req.body;
 
-            genericLoginError(req, res)
-        })
+            const identifier = body.user? body.user.toLowerCase(): '';
+            let query = `
+                SELECT id, email, username, password, role_id
+                FROM users
+                WHERE role_id = ?
+                AND (email = ?
+                OR username = ?);`;
+
+            db.query(query, [ADMIN_ID, identifier, identifier], true)
+            .then( async userRec => {
+
+                const user = userRec[0];
+
+                if(!user || !user.email || !user.password)
+                    return loginCredentialsError(req, res);
+
+                //Check if password is valid
+                if (await bcrypt.compare(body.password, user.password)) {
+
+                    loginResponse(parse.getIp(req), user.id, user.email, user.username, body.remember, true)
+                    .then((response) => res.send(response))
+                    .catch(() => genericLoginError(req, res))
+
+                } else { loginCredentialsError(req, res); }
+
+            }).catch((err) => { genericLoginError(req, res) })
+        } catch(e){
+
+            e.location = "Error in users.authorizedLogin().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
     }
 
     logout = (req, res) => {
 
-        let body = req.method === 'POST'? req.body: req.query;
-        const ip = parse.getIp(req);
+        try{
 
-        const query = `
-        DELETE
-        FROM authentications
-        WHERE ip = "${ip}" 
-        OR token = ${body.token? '\"' + body.token + '\"': 'NULL' };
-        `;
+            const ip = parse.getIp(req);
+            db.query(`DELETE FROM authentications WHERE ip = ?;`, [ip])
+            .then(() => res.send({ success: true }))
+            .catch(() => genericLoginError(req, res))
+        } catch(e){
 
-        db.query(query).then(() => {
+            e.location = "Error in users.logout().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
 
-            res.send({ success: true })
-        }).catch(() => genericLoginError(req, res))
-    }
-
-    finishRegistration = (req, res) => {
-
-        const body = req.method === 'POST'? req.body: req.query;
-
-        let query = `
-        DELETE FROM pending_users
-        WHERE expiration < NOW();
-        SELECT * FROM pending_users
-        WHERE token = "${body.token}";`;
-        db.query(query, true).then( async (pendingUserRecs) => {
-
-            //Link no longer valid or was never valid
-            if(pendingUserRecs[1].length === 0)
-                return res.status(400).send({
-                    success: false,
-                    ...codes.Error.UserRegistration.userRegistraitionLinkInvalid
-                })
-
-            const userInfo = pendingUserRecs[1][0];
-            if(userInfo.email){
-
-                const decoded = await parse.jwtVerify(body.token);
-                const password = await parse.encryptPassword(decoded.password)
-                const params = {
-                    password: password,
-                    email: userInfo.email,
-                }
-                if(userInfo.username) params.username = userInfo.username;
-                const queryParams = db.insertQueryParams(params)
-
-                query = `
-                    DELETE FROM pending_users
-                    WHERE email = "${userInfo.email}";
-                    INSERT INTO users (${queryParams.columns})
-                    VALUES (${queryParams.values});`
-
-                db.query(query, true).then(newUserRec => {
-
-
-                    const responseData = {
-                        email: userInfo.email,
-                        username: userInfo.username,
-                        userId: newUserRec[1].insertId,
-                    };
-                    const promises = [parse.signJWT(responseData)];
-
-                    if(decoded.subscribe){
-                        query = `
-                        INSERT IGNORE INTO news_subscriptions (user_id)
-                        VALUES (${newUserRec[1].insertId});`
-                        promises.push(db.query(query, true))
-                    }
-                    Promise.all(promises).then(([jwt, subscriptionRec]) => {
-
-                        res.send({
-                            ...responseData,
-                            token: jwt.token,
-                            tokenExpiration: jwt.decoded.exp
-                        });
-                    })
-
-                })
-            }
-        })
     }
 
     startRegistration = (req, res) =>{
 
-        const body = req.method === 'POST'? req.body: req.query;
+        try{
 
-        if(body.email) body.email = body.email.toLowerCase();
-        if(body.username) body.username = body.username.toLowerCase();
+            const body = req.query;
+            if(body.email) body.email = body.email.toLowerCase();
+            if(body.username) body.username = body.username.toLowerCase();
 
-        let query = `
+            let query = `
             SELECT id
             FROM users
-            WHERE email = "${body.email}";
+            WHERE email = ?;
             SELECT id
             FROM users
-            WHERE username = "${body.username}";`;
+            WHERE username = ?;`;
 
-        db.query(query, true).then( async userRec => {
+            db.query(query, [body.email, body.username], true).then( async userRec => {
 
-            /** ERRORS **/
-            const validation = validateRegisteringUser(
-                userRec[0].length > 0,
-                userRec[1] && userRec[1].length > 0,
-                body.email,
-                body.username,
-                body.password
-            )
+                /** ERRORS **/
+                const validation = validateRegisteringUser(
+                    userRec[0].length > 0,
+                    userRec[1] && userRec[1].length > 0,
+                    body.email,
+                    body.username,
+                    body.password
+                )
 
-            if(!validation.success){
+                if(!validation.success){
 
-                return res.status(401).send(validation)
-            }
+                    return res.status(401).send(validation)
+                }
 
-            const userInfo = {
-                email: body.email,
-                password: body.password,
-                expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
-            }
+                const userInfo = {
+                    email: body.email,
+                    password: body.password,
+                    expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
+                }
 
-            if(body.username) userInfo.username = body.username;
-            if(body.subscribe) userInfo.subscribe = body.subscribe;
+                if(body.username) userInfo.username = body.username;
+                if(body.subscribe) userInfo.subscribe = body.subscribe;
 
-            parse.signJWT(userInfo).then(jwt => {
+                parse.signJWT(userInfo).then(jwt => {
 
-                mail.sendUserRegistrationValidationEmail(body.email, jwt.token).then((error, info) => {
+                    mail.sendUserRegistrationEmail(body.email, jwt.token).then((error, info) => {
 
-                    if (error.rejected.length > 0) {
+                        if (error.rejected.length > 0) {
 
-                        res.status(500).send(error)
-                    } else {
+                            res.status(500).send(error)
+                        } else {
 
-                        const params = {
-                            email: userInfo.email,
-                            expiration: userInfo.expiration,
-                            token: jwt.token
-                        }
-                        if(userInfo.username) params.username = userInfo.username;
-                        const subscribeQueryParams = db.insertQueryParams(params);
-                        const userQueryParams = db.insertQueryParams(params);
-                        query = `
+                            const params = {
+                                email: userInfo.email,
+                                expiration: userInfo.expiration,
+                                token: jwt.token
+                            }
+
+                            if(userInfo.username) params.username = userInfo.username;
+                            const [insertQuery, insertParams] = db.writeInsert('pending_users', params);
+                            query = `
                             DELETE FROM pending_users
-                            where email="${body.email}";
-                            INSERT INTO pending_users (${userQueryParams.columns})
-                            VALUES (${userQueryParams.values});`;
+                            where email= ?;
+                            ${insertQuery}`;
 
-                        db.query(query, true).then(pendingUsersRec => {
-
-                            res.send(params)
-                        }).catch(err => {
-
-                            genericLoginError(req, res)
-                        })
-                    }
+                            db.query(query, [body.email].concat(insertParams))
+                                .then(() => res.send(params))
+                                .catch(() => genericLoginError(req, res))
+                        }
+                    })
                 })
-            })
-        }).catch(err => {
+            }).catch(err => {
 
-            genericLoginError(req, res)
-        })
+                genericLoginError(req, res)
+            })
+        } catch(e){
+
+            e.location = "Error in users.startRegistration().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
+    }
+
+    finishRegistration = (req, res) => {
+
+        try{
+
+            const body = req.body;
+
+            let query = `
+                DELETE FROM pending_users
+                WHERE expiration < NOW();
+                SELECT * FROM pending_users
+                WHERE token = ?;`;
+            db.query(query, [body.token], true)
+            .then( async (pendingUserRecs) => {
+
+                //Link no longer valid or was never valid
+                if(pendingUserRecs[1].length === 0)
+                    return res.status(400).send({
+                        success: false,
+                        ...codes.Error.UserRegistration.userRegistraitionLinkInvalid
+                    })
+
+                const userInfo = pendingUserRecs[1][0];
+                if(userInfo.email){
+
+                    const decoded = await parse.jwtVerify(body.token);
+                    const password = await parse.hashPassword(decoded.password)
+                    const params = {
+                        password: password,
+                        email: userInfo.email,
+                    }
+                    if(userInfo.username) params.username = userInfo.username;
+
+                    const [insertQuery, insertParams] = db.writeInsert('users', params)
+                    query = `
+                DELETE FROM pending_users
+                WHERE email = ?;
+                ${insertQuery}`;
+                    db.query(query, [userInfo.email].concat[insertParams]).then(newUserRec => {
+
+
+                        const responseData = {
+                            email: userInfo.email,
+                            username: userInfo.username,
+                            userId: newUserRec[1].insertId,
+                        };
+                        const promises = [parse.signJWT(responseData)];
+
+                        if(decoded.subscribe){
+                            query = `
+                    INSERT IGNORE INTO news_subscriptions (user_id)
+                    VALUES (?);`
+                            promises.push(db.query(query, [newUserRec[1].insertId], true))
+                        }
+                        Promise.all(promises).then(([jwt]) => {
+
+                            res.send({
+                                ...responseData,
+                                token: jwt.token,
+                                tokenExpiration: jwt.decoded.exp
+                            });
+                        })
+
+                    })
+                }
+            })
+            .catch(() => genericFinishRegistrationError(req, res))
+        } catch(e){
+
+            e.location = "Error in users.finishRegistration().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
+
     }
 
     startPasswordReset = (req, res) => {
+        try{
 
-        const body = req.method === 'POST'? req.body: req.query;
-        console.log(body);
+            const body = req.query;
 
-        let query = `
+            let query = `
         SELECT * 
         FROM users
-        WHERE email = "${body.user}"
-        OR username = "${body.user}";`;
-        db.query(query, true).then( async (userRec) => {
+        WHERE email = ?
+        OR username = ?;`;
+            db.query(query, [body.user, body.user], true)
+                .then( async (userRec) => {
 
-            //No user has either an email or username matching the requested account.
-            if(!userRec || (Array.isArray(userRec) && !userRec.length))
-                return res.send({success: true});
+                    //No user has either an email or username matching the requested account.
+                    if(!userRec || (Array.isArray(userRec) && !userRec.length))
+                        return res.send({success: true});
 
-            const email = userRec[0].email;
-            const token = parse.randomizeString(127);
-            mail.sendResetPasswordEmail(email, token).then(() => {
+                    const email = userRec[0].email;
+                    const token = parse.randomizeString(127);
+                    mail.sendResetPasswordEmail(email, token).then(() => {
 
-                let params = db.insertQueryParams({
-                    user_id: userRec[0].id,
-                    token,
-                    expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
-                }, 'user_id');
-                query = `
-                INSERT INTO pending_password_reset (${params.columns})
-                VALUES (${params.values})
-                ON DUPLICATE KEY UPDATE ${params.onDuplicateKey};
-                `;
-                db.query(query, true)
-                    .then(() => {
+                        db.insert(
+                            'pending_password_resets',
+                            {
+                                user_id: userRec[0].id,
+                                token,
+                                expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
+                            },
+                            {
+                                token,
+                                expiration: moment().add(1, 'days').format('YYYY-MM-DD hh:mm:ss')
+                            },
+                            true
+                        )
+                            .then(() => res.send({ success: true }))
+                            .catch(() => res.send({ success : true }))
+                    }).catch(() => {
 
-                        console.log('Reset Password Email Sent')
-                        return res.send({ success: true });
+                        res.send({ success: true })
                     })
-                    .catch((err) => {
 
-                        console.log(err);
-                        res.send({ success : true });
-                    })
-            }).catch(() => {
+                })
+        } catch(e){
 
-                res.send({ success: true })
-            })
-
-        })
+            e.location = "Error in users.startPasswordReset().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
     }
 
     finishPasswordReset = (req, res) => {
 
-        const body = req.method === 'POST'? req.body: req.query;
+        try{
 
-        let query = `
-        DELETE FROM pending_password_reset
-        WHERE expiration < NOW();
-        SELECT * 
-        FROM pending_password_reset p
-        LEFT JOIN users u
-        ON u.id = p.user_id
-        WHERE token = "${body.token}";`;
-        db.query(query, true).then( async (pendingUserRecs) => {
+            const body = req.body;
 
-            console.log(pendingUserRecs[1])
-            //Link no longer valid or was never valid
-            if(pendingUserRecs[1].length === 0)
-                return res.status(400).send({
-                    success: false,
-                    ...codes.Error.ResetPassword.forgotPasswordLinkInvalid
-                })
+            let query = `
+                DELETE FROM pending_password_reset
+                WHERE expiration < NOW();
+                SELECT * 
+                FROM pending_password_reset p
+                LEFT JOIN users u
+                ON u.id = p.user_id
+                WHERE token = ?;`;
+            db.query(query, [body.token], true).then( async (pendingUserRecs) => {
 
-            const userInfo = pendingUserRecs[1][0];
-            if(userInfo.user_id){
+                //Link no longer valid or was never valid
+                if(pendingUserRecs[1].length === 0)
+                    return res.status(400).send({
+                        success: false,
+                        ...codes.Error.ResetPassword.forgotPasswordLinkInvalid
+                    })
 
-                const password = await parse.hashPassword(body.password)
-                query = `
+                const userInfo = pendingUserRecs[1][0];
+                if(userInfo.user_id){
+
+                    const password = await parse.hashPassword(body.password)
+                    query = `
                     DELETE FROM pending_users
-                    WHERE email = "${userInfo.email}";
+                    WHERE email = ?;
                     UPDATE users 
                     SET password = "${password}"
-                    WHERE id = ${userInfo.user_id}`
+                    WHERE id = ?`
 
-                db.query(query, true).then(() => {
-                    res.send({ success: true })
-                })
-            }
-        })
+                    db.query(query, [userInfo.email, userInfo.user_id],true)
+                        .then(() => res.send({ success: true }))
+                }
+            })
+        } catch(e){
+
+            e.location = "Error in users.finishPasswordReset().";
+            log(e);
+            res.status(500).send({ success: false })
+        }
     }
 
 }
 
 const genericLoginError = (req, res) => {
 
-    const error = getCode('NA_LOGIN')
+    const error = codes.Error.Login.generic;
+    res.status(500).send({
+        error: error.message,
+        code: error.code
+    })
+}
+
+const genericFinishRegistrationError = (req, res) => {
+
+    const error = codes.Error.UserRegistration.generic;
     res.status(500).send({
         error: error.message,
         code: error.code
@@ -362,7 +444,7 @@ const genericLoginError = (req, res) => {
 
 const loginCredentialsError = (req, res) => {
 
-    const error = getCode('ILI_LOGIN')
+    const error = codes.Error.Login.invalidCredential;
     /** Wrong Password */
     res.status(400).send({ error: error.message, code: error.code })
 }
@@ -455,3 +537,31 @@ const validateRegisteringUser = (emailAlreadyUsed, usernameAlreadyUsed, email, u
     return { success: true }
 }
 module.exports = new User();
+
+
+const loginResponse = (ip, id, email, username, remember, admin) => {
+
+    try{
+
+        return new Promise((resolve, reject) => {
+
+            const tokenInfo = { email, username };
+            if(admin) tokenInfo.admin = true;
+
+            parse.signJWT(JSON.parse(JSON.stringify(tokenInfo)), remember)
+            .then(jwt => {
+
+                const token = jwt.token
+                const tokenExpiration = moment(jwt.decoded.exp * 1000).format('YYYY-MM-DD hh:mm:ss')
+                const params = { user_id: id, token, ip, expiration: tokenExpiration }
+                db.insert('authentications', params, true)
+                .then(() => resolve({ success: true, token, tokenExpiration}))
+                .catch(reject)
+            });
+        })
+    } catch(e){
+
+        e.location = "Error in users.loginResponse().";
+        log(e);
+    }
+}

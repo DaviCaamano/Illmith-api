@@ -3,6 +3,6 @@ const router = express.Router();
 const test = require('../utils/test')
 
 /* GET home page. */
-router.get('/deleteTestRegister', test.deleteRegisterUserTest);
+router.get('/', test.general);
 
 module.exports = router;

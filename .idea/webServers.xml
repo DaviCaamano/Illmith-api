@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="e36fce3b-a645-43bd-b3c5-4aabd29fae9e" name="front">
+        <fileTransfer rootFolder="/var/www/" accessType="SFTP" host="157.245.240.172" port="22" sshConfigId="a634f414-cca9-4c39-a5a8-47b3aacbc286" sshConfig="StoryStringApi">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="49382e41-5473-4983-a999-f2cc017a4e3d" name="back">
+        <fileTransfer rootFolder="/var/www" accessType="SFTP" host="157.245.240.172" port="22" sshConfigId="a634f414-cca9-4c39-a5a8-47b3aacbc286" sshConfig="StoryStringApi">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+      <webServer id="e5a9fd0e-17b9-4a6c-ae8f-69393248de3f" name="admin">
+        <fileTransfer rootFolder="/var/www" accessType="SFTP" host="157.245.240.172" port="22" sshConfigId="32580c2d-44f7-4e83-802a-12d6f20fac4f" sshConfig="StringStory">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" keepAliveTimeout="0" passiveMode="true" shareSSLContext="true" />
+          </advancedOptions>
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
